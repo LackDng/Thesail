@@ -134,6 +134,10 @@ add interface=wg-vpn            list=LAN
 # -------------------------------------------------------------
 # PHASE 4 - PCC LOAD BALANCE
 # Rui ro remote: TRUNG BINH-CAO. PHAI Safe Mode + giu IP DDNS
+#
+# !!! DA THAY THE: 2 line chenh toc do nhieu -> KHONG dung PCC.
+#     Dung FAILOVER thay the. Xem file: failover.rsc
+#     BO QUA toan bo Phase 4 nay, chay failover.rsc.
 # -------------------------------------------------------------
 
 # Mangle: gan mark connection cho moi connection moi tu LAN

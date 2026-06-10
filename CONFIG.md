@@ -34,12 +34,14 @@
 
 ## 3. WAN — Dual PPPoE VNPT
 
-| Interface | Type | User | Distance | check-gateway |
-|-----------|------|------|----------|---------------|
-| `pppoe-out1-Vnpt1` | PPPoE / ether15 | truongan912.fb.dng | 1 (primary) | ping |
-| `pppoe-out2-Vnpt2` | PPPoE / ether16 | truongan91.fb.dng | 2 (backup) | ping |
+| Interface | Type | User | Vai trò | Distance |
+|-----------|------|------|---------|----------|
+| `pppoe-out2-Vnpt2` | PPPoE / ether16 | truongan91.fb.dng | **PRIMARY** (line nhanh) | 1 |
+| `pppoe-out1-Vnpt1` | PPPoE / ether15 | truongan912.fb.dng | **BACKUP** (dự phòng) | 2 |
 
-`keepalive-timeout=10s` cho cả 2.
+- `keepalive-timeout=10s`, `add-default-route=no` cho cả 2 (default route quản lý bằng static recursive route).
+- **Chế độ**: Failover thuần (KHÔNG load-balance) vì 2 line chênh tốc độ.
+- Vnpt2 chết → tự chuyển Vnpt1. Vnpt2 hồi → tự khôi phục về Vnpt2.
 
 ---
 
@@ -164,24 +166,18 @@ chain=srcnat
 
 ---
 
-## 11. Mangle — PCC Load Balance 50/50
+## 11. Failover — Recursive Routing
 
-### Chain `prerouting`
+> KHÔNG dùng PCC/mangle. Default route quản lý bằng static recursive route + `check-gateway=ping`.
 
-| # | Action | Match |
-|---|--------|-------|
-| 1 | accept | dst-list=Lan-Local (bypass PCC cho inter-VLAN) |
-| 2 | mark-connection Vnpt1_conn | pcc=2/0, src-list=Lan-Local, state=new |
-| 3 | mark-connection Vnpt2_conn | pcc=2/1, src-list=Lan-Local, state=new |
-| 4 | mark-routing to-Vnpt1 | conn-mark=Vnpt1_conn |
-| 5 | mark-routing to-Vnpt2 | conn-mark=Vnpt2_conn |
+**Cơ chế phát hiện lỗi** (bắt cả 2 trường hợp: PPPoE rớt + internet phía VNPT chết):
 
-### Chain `output` (cho traffic do router tự khởi tạo)
+| Probe | Ghim qua line | Đích ping | check-gateway |
+|-------|---------------|-----------|---------------|
+| probe-PRIMARY | pppoe-out2-Vnpt2 | 8.8.8.8/32 | ping |
+| probe-BACKUP | pppoe-out1-Vnpt1 | 1.0.0.1/32 | ping |
 
-| # | Action | Match |
-|---|--------|-------|
-| 6 | mark-routing to-Vnpt1 | conn-mark=Vnpt1_conn |
-| 7 | mark-routing to-Vnpt2 | conn-mark=Vnpt2_conn |
+Khi không ping được → probe route INACTIVE → default route tương ứng INACTIVE → chuyển sang line còn lại.
 
 ---
 
@@ -191,24 +187,18 @@ chain=srcnat
 
 | Table | Mục đích |
 |-------|---------|
-| `main` | Default (router itself + traffic không mark) |
-| `to-Vnpt1` | PCC half → Vnpt1 |
-| `to-Vnpt2` | PCC half → Vnpt2 |
+| `main` | Tất cả traffic (failover, không phân nhánh) |
 
-### Routes
+### Routes (failover recursive)
 
 ```
-main table:
-  0.0.0.0/0  pppoe-out1-Vnpt1  distance=1   (dynamic from PPPoE)
-  0.0.0.0/0  pppoe-out2-Vnpt2  distance=2   (dynamic from PPPoE)
+Probe routes (pin + ping-check):
+  8.8.8.8/32   gateway=pppoe-out2-Vnpt2  scope=10  check-gateway=ping   [probe primary]
+  1.0.0.1/32   gateway=pppoe-out1-Vnpt1  scope=10  check-gateway=ping   [probe backup]
 
-to-Vnpt1 table:
-  0.0.0.0/0  pppoe-out1-Vnpt1  distance=1   check-gateway=ping
-  0.0.0.0/0  pppoe-out2-Vnpt2  distance=2   failover
-
-to-Vnpt2 table:
-  0.0.0.0/0  pppoe-out2-Vnpt2  distance=1   check-gateway=ping
-  0.0.0.0/0  pppoe-out1-Vnpt1  distance=2   failover
+Default routes (recursive):
+  0.0.0.0/0    gateway=8.8.8.8  distance=1  target-scope=10   [PRIMARY via Vnpt2]
+  0.0.0.0/0    gateway=1.0.0.1  distance=2  target-scope=10   [BACKUP  via Vnpt1]
 
 Connected routes:
   10.10.10.0/24    wg-vpn
@@ -217,6 +207,8 @@ Connected routes:
   192.168.31.0/24  vlan31-Office
   192.168.61.0/24  vlan61-Controller
 ```
+
+> **Lưu ý**: traffic người dùng đến đúng IP `8.8.8.8` sẽ luôn đi qua Vnpt2 (primary), đến `1.0.0.1` luôn qua Vnpt1 — do 2 IP này bị ghim làm probe. Không ảnh hưởng traffic khác.
 
 ---
 
@@ -294,13 +286,14 @@ hostname:     <auto>.sn.mynetname.net
                     Internet
                   /         \
             VNPT1            VNPT2
+           (backup)        (PRIMARY)
               |                |
          ether15           ether16
         (pppoe-out1)     (pppoe-out2)
-         distance=1       distance=2
-              \    PCC    /
-               \  50/50  /
-                \       /
+         distance=2       distance=1
+              \  failover  /
+               \  (auto)  /
+                \        /
               TheSail-Router
                  |   |   |   |
             ┌────┴───┴───┴───┴───────────────┐
