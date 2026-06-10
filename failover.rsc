@@ -1,4 +1,12 @@
 # =============================================================
+# !!! DEPRECATED - DO NOT USE !!!
+# Phuong phap recursive routing co loi chicken-and-egg:
+# Khi probe inactive 1 nhip -> default route inactive -> router
+# khong co duong ping ra -> probe vinh vien inactive -> mat internet.
+# Dung failover-v2.rsc thay the (Netwatch-based, on dinh hon).
+# =============================================================
+
+# =============================================================
 # FAILOVER CONFIG - The Sail Hotel Router
 # RouterOS 7.18.2 | CCR2004-16G-2S+
 #

@@ -166,18 +166,19 @@ chain=srcnat
 
 ---
 
-## 11. Failover — Recursive Routing
+## 11. Failover — Netwatch + Distance Manipulation
 
-> KHÔNG dùng PCC/mangle. Default route quản lý bằng static recursive route + `check-gateway=ping`.
+> KHÔNG dùng PCC/mangle, KHÔNG dùng recursive routing (V1 có chicken-and-egg).
+> Default route do PPPoE tự sinh. Netwatch ping probe ghim qua từng line → khi probe DOWN, thay đổi `default-route-distance` của PPPoE để chuyển active route.
 
 **Cơ chế phát hiện lỗi** (bắt cả 2 trường hợp: PPPoE rớt + internet phía VNPT chết):
 
-| Probe | Ghim qua line | Đích ping | check-gateway |
-|-------|---------------|-----------|---------------|
-| probe-PRIMARY | pppoe-out2-Vnpt2 | 8.8.8.8/32 | ping |
-| probe-BACKUP | pppoe-out1-Vnpt1 | 1.0.0.1/32 | ping |
+| Probe IP | Ghim qua line | Vai trò | Hành động khi DOWN |
+|----------|---------------|---------|---------------------|
+| 1.1.1.1 | pppoe-out2-Vnpt2 | Watchdog PRIMARY | distance Vnpt2 → 99 (failover sang Vnpt1) |
+| 9.9.9.9 | pppoe-out1-Vnpt1 | Keepalive BACKUP | (chỉ giữ link ấm) |
 
-Khi không ping được → probe route INACTIVE → default route tương ứng INACTIVE → chuyển sang line còn lại.
+**Khôi phục tự động**: khi probe Vnpt2 UP trở lại, script set distance Vnpt2 = 1 → traffic về lại Vnpt2.
 
 ---
 
@@ -189,16 +190,16 @@ Khi không ping được → probe route INACTIVE → default route tương ứn
 |-------|---------|
 | `main` | Tất cả traffic (failover, không phân nhánh) |
 
-### Routes (failover recursive)
+### Routes
 
 ```
-Probe routes (pin + ping-check):
-  8.8.8.8/32   gateway=pppoe-out2-Vnpt2  scope=10  check-gateway=ping   [probe primary]
-  1.0.0.1/32   gateway=pppoe-out1-Vnpt1  scope=10  check-gateway=ping   [probe backup]
+Default (dynamic, do PPPoE tự sinh):
+  0.0.0.0/0    pppoe-out2-Vnpt2   distance=1   <- ACTIVE (Vnpt2)
+  0.0.0.0/0    pppoe-out1-Vnpt1   distance=2   <- standby (Vnpt1)
 
-Default routes (recursive):
-  0.0.0.0/0    gateway=8.8.8.8  distance=1  target-scope=10   [PRIMARY via Vnpt2]
-  0.0.0.0/0    gateway=1.0.0.1  distance=2  target-scope=10   [BACKUP  via Vnpt1]
+Probe routes (ghim, để netwatch ping đúng line):
+  1.1.1.1/32   pppoe-out2-Vnpt2   distance=1   [probe-pin-Vnpt2]
+  9.9.9.9/32   pppoe-out1-Vnpt1   distance=1   [probe-pin-Vnpt1-keepalive]
 
 Connected routes:
   10.10.10.0/24    wg-vpn
@@ -208,7 +209,14 @@ Connected routes:
   192.168.61.0/24  vlan61-Controller
 ```
 
-> **Lưu ý**: traffic người dùng đến đúng IP `8.8.8.8` sẽ luôn đi qua Vnpt2 (primary), đến `1.0.0.1` luôn qua Vnpt1 — do 2 IP này bị ghim làm probe. Không ảnh hưởng traffic khác.
+### Netwatch
+
+| Name | Host | Type | Interval | Timeout | up-script | down-script |
+|------|------|------|----------|---------|-----------|-------------|
+| watchdog-Vnpt2-primary | 1.1.1.1 | icmp | 10s | 2s | Vnpt2 distance=1 | Vnpt2 distance=99 |
+| keepalive-Vnpt1-backup | 9.9.9.9 | icmp | 30s | 2s | — | — |
+
+> **Lưu ý**: traffic người dùng đến đúng IP `1.1.1.1` sẽ luôn đi qua Vnpt2, đến `9.9.9.9` luôn qua Vnpt1 (vì 2 IP này bị ghim làm probe). Không ảnh hưởng traffic khác.
 
 ---
 
